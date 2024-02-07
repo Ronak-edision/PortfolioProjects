@@ -1,0 +1,197 @@
+select p_location, new_date, total_cases,new_cases, total_deaths, population 
+from covid_death 
+order  by 1,2;
+
+--looking at total cases vs total deaths of nepal
+select p_location, new_date, total_cases, total_deaths, (total_deaths/total_cases)*100 as deathPercenatge
+from covid_death 
+where p_location like '%Nepal%'
+order  by 1,2;
+
+--looking at total cases vs total population of nepal
+select p_location, new_date, total_cases, population, (total_cases/population)*100 as infectionPercentage
+from covid_death 
+where p_location like '%Nepal%'
+order  by 1,2;
+
+--looking at countries with highest infection arte compared to population
+select p_location,  population, max(total_cases) as highestInfectionCount, max((total_cases/population))*100 as percenatgeInfected
+from covid_death 
+--where p_location like '%Nepal%'
+group by p_location,  population
+order  by percenatgeInfected desc;
+
+
+--showing countries with highest death count per population
+select p_location, max(total_deaths) as totalDeathCount
+from covid_death
+where   continent is not null
+group by p_location
+having totalDeathCount is not null
+order by totalDeathCount desc;
+
+--provide only country with data of totaldeaths
+SELECT p_location, totalDeathCount
+FROM (
+    SELECT p_location, MAX(total_deaths) AS totalDeathCount
+    FROM covid_death
+    WHERE continent IS NOT NULL
+    GROUP BY p_location
+) AS sub
+WHERE totalDeathCount IS NOT NULL
+ORDER BY totalDeathCount DESC;
+
+
+--let's break it down  by continent
+--showing the contients with highest death count
+select continent, max(total_deaths) as totalDeathCount
+from covid_death
+where   continent is not null
+group by continent
+order by totalDeathCount desc;
+
+--accurate but not good for visualization
+select p_location, max(total_deaths) as totalDeathCount
+from covid_death
+where   continent is  null
+group by p_location
+order by totalDeathCount desc;
+
+--global numbers
+SELECT new_date, total_case, total_deaths,
+       CASE
+		   WHEN total_case > 0 THEN total_deaths / total_case
+		   ELSE 0
+	   END AS percent_deaths
+FROM (
+    SELECT new_date, 
+           SUM(new_cases) AS total_case, 
+           SUM(new_deaths) AS total_deaths
+    FROM covid_death
+    WHERE continent IS NOT NULL
+    GROUP BY new_date
+) AS sub
+WHERE total_case IS NOT NULL
+ORDER BY total_deaths DESC;
+
+--looking at total population vs vaccinations
+select 
+death.continent, death.p_location, death.new_date, death.population, vacine.new_vaccinations
+from  covid_death as death
+join  covid_vacine as vacine
+on death.p_location=vacine.p_location and death.new_date=vacine.new_date
+and death.continent is not null
+order by 1,2;
+
+--desc table
+select column_name, data_type
+from information_schema.columns
+where table_name= 'covid_vacine';
+
+--shows the cumulation of vaccination rate in each country
+select 
+death.continent, death.p_location, death.new_date, death.population, vacine.new_vaccinations ,
+--sum(vacine.new_vaccinations) over (partition by death.p_location order by death.p_location, death.p_date)
+SUM(vacine.new_vaccinations) OVER (PARTITION BY death.p_location ORDER BY death.new_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+from  covid_death as death
+join  covid_vacine as vacine
+on death.p_location=vacine.p_location and death.new_date=vacine.new_date
+where death.continent is not null 
+order by 2,3 ;
+
+
+--percenatge of population vacinated per day
+--use cte
+with popvsvac(continent, p_location,new_date, population,new_vacination, running_total  )
+as(
+select 
+death.continent, death.p_location, death.new_date, death.population, vacine.new_vaccinations ,
+SUM(vacine.new_vaccinations) OVER (PARTITION BY death.p_location ORDER BY death.new_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+from  covid_death as death
+join  covid_vacine as vacine
+on death.p_location=vacine.p_location and death.new_date=vacine.new_date
+where death.continent is not null and death.p_location='Nepal' )
+--order by 2,3 ;
+select *, (running_total/population)*100 as percentage
+from popvsvac;
+
+--total vacination rate of country
+	WITH popVSvac(continent, p_location, population, running_total) AS (
+		SELECT 
+        death.continent, 
+        death.p_location, 
+        death.population,
+        SUM(vacine.new_vaccinations) OVER (PARTITION BY death.p_location ORDER BY death.new_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS total_vaccination
+    FROM  
+        covid_death AS death
+    JOIN  
+        covid_vacine AS vacine
+    ON 
+        death.p_location = vacine.p_location 
+        AND death.new_date = vacine.new_date
+    WHERE 
+        death.continent IS NOT NULL
+)
+SELECT 
+    continent, p_location, population, 
+	total_vacination, 
+	(total_vacination/population)*100 as percenatge_of_population_vacinated
+	from
+	(select continent, p_location, population, max(running_total) as total_vacination   
+FROM 
+    popvsvac
+	group by  continent, p_location, population
+	) order by total_vacination desc
+	 ;
+	
+	
+	-- Create temporary table
+	drop table if exists PercentagePopulationVaccinated;
+CREATE TEMPORARY TABLE PercentagePopulationVaccinated (
+    continent VARCHAR,
+    p_location VARCHAR,
+    new_date DATE,
+    population numeric,
+    new_vaccination numeric,
+    running_total numeric 
+);
+
+-- Insert data into temporary table
+INSERT INTO PercentagePopulationVaccinated
+SELECT 
+    death.continent, 
+    death.p_location, 
+    death.new_date, 
+    death.population, 
+    vacine.new_vaccinations,
+    SUM(vacine.new_vaccinations) OVER (PARTITION BY death.p_location ORDER BY death.new_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+FROM  
+    covid_death AS death
+JOIN  
+    covid_vacine AS vacine
+ON 
+    death.p_location = vacine.p_location 
+    AND death.new_date = vacine.new_date
+WHERE 
+    death.continent IS NOT NULL;
+    --AND death.p_location = 'Nepal';
+
+-- Query from temporary table
+SELECT 
+    *, 
+    (running_total / population) * 100 AS percentage
+FROM 
+    PercentagePopulationVaccinated;
+
+--creating view to store data for later visulaizations
+create view populationVacinated as
+select 
+death.continent, death.p_location, death.new_date, death.population, vacine.new_vaccinations ,
+SUM(vacine.new_vaccinations) OVER (PARTITION BY death.p_location ORDER BY death.new_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+from  covid_death as death
+join  covid_vacine as vacine
+on death.p_location=vacine.p_location and death.new_date=vacine.new_date
+where death.continent is not null 
+order by 2,3 ;
+
+select * from populationVacinated;
